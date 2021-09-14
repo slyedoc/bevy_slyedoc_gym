@@ -1,0 +1,44 @@
+[package]
+name = "bevy_gym"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bevy = { version = "0.5.0", default-features = false, features = [
+    #"bevy_audio",
+    "bevy_dynamic_plugin",
+    "bevy_gilrs",
+    "bevy_gltf",
+    "bevy_wgpu",
+    "bevy_winit",
+    "render",
+    # "png",
+    # "hdr",
+    #"mp3",
+    #"wav",
+    "x11",
+    "bevy_dylib", # Faster compile times
+]}
+tch = "0.5.0"
+bevy_rapier2d = { version = "0.11.0", features = [ "simd-stable", "render" ] }
+clap = { version = "3.0.0-beta.2" }
+bevy-inspector-egui = { git = "https://github.com/jakobhellermann/bevy-inspector-egui"}
+rand = { version = "0.8.4" }
+rand_pcg = "0.3.1"
+failure = "0.1.8"
+ndarray = { version = "0.15.3" }
+
+[patch.crates-io]
+bevy_rapier2d = { path = "../bevy_rapier/bevy_rapier2d" }
+
+# Add this to your Cargo.toml
+#[profile.dev.package.bevy_rapier2d]
+#opt-level = 3
+
+[dev-dependencies]
+bevycheck = "0.1.4"
+
+[profile.dev.package.bevy]
+opt-level = 3
