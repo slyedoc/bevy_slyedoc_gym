@@ -19,6 +19,9 @@ impl Plugin for AcrobotPlugin {
             app.add_system(setup_graphics.system())
                 .add_system(keyboard_input.system());
         }
+
+        println!("Keys: A and D");
+        println!("WARNING: No models really suport this.");
     }
 }
 
@@ -150,19 +153,5 @@ fn keyboard_input(
         if keyboard.pressed(KeyCode::D) {
             rb_forces.force = Vec2::new(10.0, 0.0).into();
         }
-    }
-}
-
-/* A system that displays the events. */
-fn _display_events(
-    mut intersection_events: EventReader<IntersectionEvent>,
-    mut contact_events: EventReader<ContactEvent>,
-) {
-    for intersection_event in intersection_events.iter() {
-        println!("Received intersection event: {:?}", intersection_event);
-    }
-
-    for contact_event in contact_events.iter() {
-        println!("Received contact event: {:?}", contact_event);
     }
 }

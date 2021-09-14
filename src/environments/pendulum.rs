@@ -10,9 +10,11 @@ pub struct PendulumPlugin {
 
 impl Plugin for PendulumPlugin {
     fn build(&self, app: &mut AppBuilder) {
-        insert_env_resources(app, 2, 4);
-        
-        app.add_startup_system(setup_physics.system());
+        insert_env_resources(app, 2, 2);
+
+        app.add_startup_system(setup_physics.system())
+            .add_system_to_stage(CoreStage::PreUpdate, update_state.system())
+            .add_system_to_stage(CoreStage::PostUpdate, take_action.system());
 
         if self.render {
             app.add_system(setup_graphics.system())
@@ -70,6 +72,52 @@ fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfigu
     commands
         .spawn()
         .insert(JointBuilderComponent::new(joint, anchor, link));
+}
+
+const ACTION_FORCE: f32 = 3000.0; // F / dt
+fn take_action(
+    mut env_action: ResMut<EnvironmentAction>,
+    mut cart: Query<&mut RigidBodyForces, With<Link>>,
+    params: Res<IntegrationParameters>,
+) {
+    //println!("take_action: {}", env_action.take);
+    if env_action.take {
+        for mut rb_f in cart.iter_mut() {
+            match env_action.action {
+                0 => rb_f.force = Vec2::new(-ACTION_FORCE * params.dt, 0.0).into(),
+                1 => rb_f.force = Vec2::new(ACTION_FORCE * params.dt, 0.0).into(),
+                _ => panic!("action invalid: {}", env_action.action),
+            }
+        }
+        env_action.take = false;
+    }
+}
+
+// Update Current State of the environment
+fn update_state(
+    mut state: ResMut<EnvironmentState>,
+    env_action: Res<EnvironmentAction>,
+    link: Query<(&RigidBodyPosition, &RigidBodyVelocity), With<Link>>,
+    mut ev_reset: EventWriter<EnvironmentResetEvent>,
+) {
+    //println!("udpate_state");
+    // Find our obserables
+    let mut cart_pos_x = 0.0;
+    let mut cart_vel = 0.0;
+    for (rb_pos, rb_vel) in link.iter() {
+        cart_pos_x = rb_pos.position.translation.x;
+        cart_vel = rb_vel.linvel[0];
+    }
+
+    // Update state using that info
+    state.observation = vec![cart_pos_x, cart_vel];
+    state.action = env_action.action;
+    state.reward = 1.0;
+
+    state.is_done = false; // TODO: This corrently only works on cartpole
+    if state.is_done {
+        ev_reset.send(EnvironmentResetEvent);
+    }
 }
 
 fn keyboard_input(

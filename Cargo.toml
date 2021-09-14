@@ -21,14 +21,15 @@ bevy = { version = "0.5.0", default-features = false, features = [
     "x11",
     "bevy_dylib", # Faster compile times
 ]}
-tch = "0.5.0"
-bevy_rapier2d = { version = "0.11.0", features = [ "simd-stable", "render" ] }
+tch = { git = "https://github.com/LaurentMazare/tch-rs" }
+bevy_rapier2d = { version = "0.11.0", features = [ "simd-stable", "render", "parallel" ] }
 clap = { version = "3.0.0-beta.2" }
 bevy-inspector-egui = { git = "https://github.com/jakobhellermann/bevy-inspector-egui"}
 rand = { version = "0.8.4" }
 rand_pcg = "0.3.1"
 failure = "0.1.8"
 ndarray = { version = "0.15.3" }
+neat = { git = "https://github.com/suhdonghwi/neat.git" }
 
 [patch.crates-io]
 bevy_rapier2d = { path = "../bevy_rapier/bevy_rapier2d" }

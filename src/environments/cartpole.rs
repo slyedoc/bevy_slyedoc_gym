@@ -1,19 +1,17 @@
+use crate::environment::*;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
-use crate::environment::*;
 pub struct CartPolePlugin {
     pub render: bool,
 }
-
 
 impl Plugin for CartPolePlugin {
     fn build(&self, app: &mut AppBuilder) {
         insert_env_resources(app, 2, 4);
 
-        app.init_resource()
-            .add_startup_system(setup_physics.system())
-            .add_system(update_state.system())
-            .add_system(take_action.system())
+        app.add_startup_system(setup_enviroment.system())
+            .add_system_to_stage(CoreStage::PreUpdate, update_state.system())
+            .add_system_to_stage(CoreStage::PostUpdate, take_action.system())
             .add_system(reset_listener.system());
 
         if self.render {
@@ -30,29 +28,35 @@ struct Ground;
 
 const CART_RANGE: f32 = 4.8;
 const POLE_ANGLE: f32 = 0.418; // 24 degrees
+const ACTION_FORCE: f32 = 3000.0; // F / dt
 
 fn take_action(
-    env_action: Res<EnvironmentAction>,
+    mut env_action: ResMut<EnvironmentAction>,
     mut cart: Query<&mut RigidBodyForces, With<Cart>>,
+    params: Res<IntegrationParameters>,
 ) {
-    for mut rb_f in cart.iter_mut() {
-        match env_action.action {
-            0 => rb_f.force = Vec2::new(-100.0, 0.0).into(),
-            1 => rb_f.force = Vec2::new(100.0, 0.0).into(),
-            _ => panic!("action invalid")
+    //println!("take_action: {}", env_action.take);
+    if env_action.take {
+        for mut rb_f in cart.iter_mut() {
+            match env_action.action {
+                0 => rb_f.force = Vec2::new(-ACTION_FORCE * params.dt , 0.0).into(),
+                1 => rb_f.force = Vec2::new(ACTION_FORCE * params.dt , 0.0).into(),
+                _ => panic!("action invalid: {}", env_action.action),
+            }
         }
+        env_action.take = false;
     }
 }
-
-
 
 // Update Current State of the environment
 fn update_state(
     mut state: ResMut<EnvironmentState>,
+    env_action: Res<EnvironmentAction>,
     pole: Query<(&RigidBodyPosition, &RigidBodyVelocity), With<Pole>>,
     cart: Query<(&RigidBodyPosition, &RigidBodyVelocity), With<Cart>>,
     mut ev_reset: EventWriter<EnvironmentResetEvent>,
 ) {
+    //println!("udpate_state");
     // Find our obserables
     let mut cart_pos_x = 0.0;
     let mut cart_vel = 0.0;
@@ -66,18 +70,15 @@ fn update_state(
         pole_angle = rb_pos.position.rotation.angle();
         pole_angle_vel = rb_vel.angvel;
     }
+
+    // Update state using that info
     state.observation = vec![cart_pos_x, cart_vel, pole_angle, pole_angle_vel];
-
-    // Set out our reward
-    state.reward += 1.0;
-
-    // Check that the cart is with in bounds
-    let reset = reset_check(cart_pos_x, pole_angle);
-    if reset {
-        state.is_done = true;
+    state.action = env_action.action;
+    state.reward = 1.0;
+    state.is_done = reset_check(cart_pos_x, pole_angle);
+    if state.is_done {
         ev_reset.send(EnvironmentResetEvent);
     }
-
 }
 
 fn reset_check(cart_pos_x: f32, pole_angle: f32) -> bool {
@@ -93,11 +94,11 @@ fn reset_check(cart_pos_x: f32, pole_angle: f32) -> bool {
 
 fn setup_graphics(mut commands: Commands) {
     let mut camera = OrthographicCameraBundle::new_2d();
-    camera.transform = Transform::from_translation(Vec3::new(0.0, 250.0, 100.0));
+    camera.transform = Transform::from_translation(Vec3::new(0.0, 150.0, 50.0));
     commands.spawn_bundle(camera);
 }
 
-fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
+fn setup_enviroment(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
     rapier_config.scale = 50.0;
 
     /* Create the ground. */
@@ -121,8 +122,9 @@ fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfigu
 }
 
 fn spawn_cartpole(mut commands: Commands, ground: Entity) {
-    let pole_size = Vec2::new(0.1, 3.0);
-    let cart_size = Vec2::new(2.0, 1.0);
+    let pole_size = Vec2::new(0.2, 4.0);
+    let cart_size = Vec2::new(4.0, 2.0);
+
     let cart = commands
         .spawn_bundle(RigidBodyBundle {
             position: Vec2::new(0.0, 0.0).into(),
@@ -131,7 +133,8 @@ fn spawn_cartpole(mut commands: Commands, ground: Entity) {
         })
         .insert_bundle(ColliderBundle {
             collider_type: ColliderType::Sensor,
-            shape: ColliderShape::cuboid(cart_size.x, cart_size.y),
+            shape: ColliderShape::cuboid(cart_size.x * 0.5, cart_size.y * 0.5),
+            mass_properties: ColliderMassProps::Density(2.0),
             material: ColliderMaterial {
                 restitution: 0.7,
                 ..Default::default()
@@ -142,18 +145,16 @@ fn spawn_cartpole(mut commands: Commands, ground: Entity) {
         .insert(ColliderDebugRender::from(Color::MAROON))
         .insert(Cart)
         .id();
+
     let pole = commands
         .spawn_bundle(RigidBodyBundle {
-            position: Vec2::new(0.0, pole_size.y * 0.5).into(),
+            position: Vec2::new(0.0, (pole_size.y * 0.5) + (cart_size.y * 0.5)).into(),
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
-            shape: ColliderShape::cuboid(pole_size.x, pole_size.y),
-            material: ColliderMaterial {
-                restitution: 0.7,
-                ..Default::default()
-            },
+            shape: ColliderShape::cuboid(pole_size.x * 0.5, pole_size.y * 0.5),
             collider_type: ColliderType::Sensor,
+            mass_properties: ColliderMassProps::Density(0.5),
             ..Default::default()
         })
         .insert(ColliderPositionSync::Discrete)
@@ -168,8 +169,8 @@ fn spawn_cartpole(mut commands: Commands, ground: Entity) {
         .spawn()
         .insert(JointBuilderComponent::new(cart_rollers_joint, ground, cart));
     let pole_joint = BallJoint::new(
-        Vec2::new(0.0, cart_size.y).into(),
-        Vec2::new(0.0, -pole_size.y).into(),
+        Vec2::new(0.0, cart_size.y * 0.5).into(),
+        Vec2::new(0.0, -pole_size.y * 0.5).into(),
     );
     commands
         .spawn()
@@ -187,11 +188,9 @@ fn reset_listener(
 ) {
     let mut reset = false;
     for _ in ev_reset.iter() {
-        println!("Reset");
         reset = true;
     }
     if reset {
-
         for e in query_set.q0().iter() {
             commands.entity(e).despawn_recursive();
         }
@@ -199,7 +198,9 @@ fn reset_listener(
             commands.entity(e).despawn_recursive();
         }
 
-        let g =  query_set.q2().iter().next();
+        // TODO: hmmmm, do joints despawn with there entity, if not need to do it here
+
+        let g = query_set.q2().iter().next();
         if let Some(g) = g {
             spawn_cartpole(commands, g);
         }
@@ -209,13 +210,14 @@ fn reset_listener(
 fn keyboard_input(
     mut rigid_bodies: Query<&mut RigidBodyForces, With<Cart>>,
     keyboard_input: Res<Input<KeyCode>>,
+    params: Res<IntegrationParameters>,
 ) {
     for mut rb_forces in rigid_bodies.iter_mut() {
         if keyboard_input.pressed(KeyCode::A) {
-            rb_forces.force = Vec2::new(-100.0, 0.0).into();
+            rb_forces.force = Vec2::new(-ACTION_FORCE * params.dt, 0.0).into();
         }
         if keyboard_input.pressed(KeyCode::D) {
-            rb_forces.force = Vec2::new(100.0, 0.0).into();
+            rb_forces.force = Vec2::new(ACTION_FORCE * params.dt, 0.0).into();
         }
     }
 }
