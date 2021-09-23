@@ -2,68 +2,78 @@
 //
 // https://github.com/suhdonghwi/neat
 
-use bevy::prelude::*;
-//use neat::network::Network;
-//use neat::{innovation_record::InnovationRecord, network::feedforward::Feedforward, pool::Pool};
+use std::time::Duration;
 
-use crate::environment::*;
+use crate::helpers;
+use bevy::utils::HashMap;
+use neat::innovation_record::InnovationRecord;
+use neat::network::Network;
+use neat::network::feedforward::Feedforward;
+use neat::pool::Pool;
 
-use super::MLModel;
+impl NeatML {
+    pub fn new(path: &str, verbosity: bool) -> Self {
+        let verbosity = match verbosity {
+            true => 1,
+            false => 0,
+        };
+        let params = helpers::read_parameters_file(path);
+        let mut innov_record = InnovationRecord::new(params.input_number, params.output_number);
+        let pool = Pool::<Feedforward>::new(params.clone(), verbosity, &mut innov_record);
 
-pub struct NeatMLPlugin;
-impl Plugin for NeatMLPlugin {
-    fn build(&self, app: &mut AppBuilder) {
-        app.init_non_send_resource::<NeatML>()
-            .add_system_to_stage(CoreStage::Update, NeatML::update_action.exclusive_system());
+        Self {
+            innov_record: innov_record,
+            pool: pool,
+            population: params.population,
+            generation_start: Duration::new(0, 0),
+        }
     }
 }
 
-impl FromWorld for NeatML {
-    fn from_world(world: &mut World) -> Self {
-        let space = world
-            .get_resource::<Environment>()
-            .expect("Res<EnvSpace> not found.");
-        let observation_space = space.observation_space as i64;
-        let action_space = space.action_space as i64;
-        println!("shape: in {}, out {}", observation_space, action_space);
 
-        Self {}
-    }
-}
 
 pub struct NeatML {
-    //pub model: nn::Sequential,
-//pub opt: nn::Optimizer<nn::Adam>,
-//pub steps: Vec<EnvironmentState>,
+    innov_record: InnovationRecord,
+    pool: Pool<Feedforward>,
+    pub population: usize,
+    generation_start: Duration,
 }
 
-impl MLModel for NeatML {
-    fn update_action(world: &mut World) {
-        let world_cell = world.cell();
+impl NeatML {
+    pub fn step(&mut self, observations: &[f32], reward: f32, done: bool) -> usize {
+        let mut action: usize;
+        let output = self
+            .pool
+            .activate_nth(
+                0,
+                &[
+                    observations[0] as f64,
+                    observations[1] as f64,
+                    observations[2] as f64,
+                ],
+            )
+            .unwrap();
 
-        // Get env state and run it though our model giving us an action
-        let mut _ml = world_cell.get_non_send_mut::<NeatML>().unwrap();
-        let env_state = world_cell.get_resource_mut::<EnvironmentState>().unwrap();
-        let mut _env_action = world_cell.get_resource_mut::<EnvironmentAction>().unwrap();
-        let mut env_counter = world_cell.get_resource_mut::<EnvironmentCounter>().unwrap();
-
-        // have we run enough steps this epoch, if so train
-        if env_state.is_done && env_counter.step > env_counter.step_max {
-            let sum_r: f32 = 0.0;
-            println!(
-                "epoch: {:<3} episodes: {:<5} avg reward per episode: {:.2}",
-                env_counter.epoch,
-                env_counter.episode,
-                sum_r / env_counter.episode as f32
-            );
-            // Do what ever you need to do to train
-
-            env_counter.episode = 0;
-            env_counter.step = 0;
-            env_counter.epoch += 1;
-        } else if env_state.is_done {
-            env_counter.episode += 1;
+        if output[0] > 0.5 {
+            action = 0; // jump
         }
-        env_counter.step += 1;
+        action = 1; // nothing
+
+        if done {
+             let generation = self.pool.generation();
+             let fitness_list: Vec<f64> = vec![reward as f64; 1];
+
+             let mut best_network = self
+                 .pool
+                 .evaluate(|i, network| network.evaluate(fitness_list[i]))
+                 .clone();
+             let best_fitness = best_network.fitness().unwrap();
+
+             println!(" best_fitness: {}, generation: {}", best_fitness, generation);
+
+             self.pool.evolve(&mut self.innov_record);
+        }
+        println!("action: {}", action);
+        action
     }
 }

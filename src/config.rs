@@ -8,7 +8,7 @@ pub struct Config {
     #[clap(short, long, default_value = "acrobot", possible_values = &["acrobot", "cartpole", "mountaincar", "pendulum", "flappy"])]
     pub environment: EnvironmentType,
 
-    #[clap(short, long, default_value = "pg", possible_values = &["ppo", "pg"])]
+    #[clap(short, long, default_value = "pg", possible_values = &["ppo", "pg", "neat"])]
     pub model: ModelType,
 
     #[clap(short, long)]

@@ -10,43 +10,100 @@ pub struct AcrobotPlugin {
 
 impl Plugin for AcrobotPlugin {
     fn build(&self, app: &mut AppBuilder) {
-        insert_env_resources(app, 2,  4);
+        insert_env_resources(app, 2, 4);
 
-        app.add_startup_system(setup_physics.system())
-        .add_system(step.system());
+        app.add_startup_system(setup_environment.system())
+            .add_system_to_stage(CoreStage::PreUpdate, update_state.system())
+            .add_system_to_stage(CoreStage::PostUpdate, take_action.system());
 
         if self.render {
-            app.add_system(setup_graphics.system())
-                .add_system(keyboard_input.system());
+            app.add_system_to_stage(CoreStage::Update, keyboard_input.system());
+            println!("Keys: A and D");
         }
 
-        println!("Keys: A and D");
-        println!("WARNING: No models really suport this.");
+        println!("WARNING: No models really support this.");
+
     }
 }
 
-fn step(mut env: ResMut<EnvironmentState>) {
-    env.reward += 0.1;
-    env.is_done = false;
+const RAPIER_SCALE: f32 = 50.0;
+const LINK_SIZE_HALF_X: f32 = 0.2;
+const LINK_SIZE_HALF_Y: f32 = 1.0;
+const ACTION_FORCE: f32 = 1000.0;
+
+fn take_action(
+    mut env_state: ResMut<EnvironmentState>,
+    mut link: Query<&mut RigidBodyForces, With<Link1>>,
+    params: Res<IntegrationParameters>,
+) {
+    if let Some(action) = env_state.action {
+        for mut rb_f in link.iter_mut() {
+            println!("action: {}", action);
+            match action {
+                0 => rb_f.force = Vec2::new(-ACTION_FORCE * params.dt, 0.0).into(),
+                1 => rb_f.force = Vec2::new(ACTION_FORCE * params.dt, 0.0).into(),
+                _ => panic!("action invalid: {}", action),
+            }
+        }
+        // Clear after use for now
+        env_state.action = None;
+    }
+}
+
+fn keyboard_input(mut env_state: ResMut<EnvironmentState>, keyboard: Res<Input<KeyCode>>) {
+    if keyboard.pressed(KeyCode::A) {
+        env_state.action = Some(0)
+    }
+    if keyboard.pressed(KeyCode::D) {
+        env_state.action = Some(1)
+    }
 }
 
 
-fn setup_graphics(mut commands: Commands) {
-    let mut camera = OrthographicCameraBundle::new_2d();
-    camera.transform = Transform::from_translation(Vec3::new(0.0, 0.0, 100.0));
-    commands.spawn_bundle(camera);
-}
+// Update Current State of the environment
+fn update_state(
+    mut state: ResMut<EnvironmentState>,
+    link1: Query<(&RigidBodyPosition, &RigidBodyVelocity), With<Link1>>,
+    link2: Query<(&RigidBodyPosition, &RigidBodyVelocity), With<Link2>>,
+) {
+    // Find our observables
+    let mut link1_pos_x = 0.0;
+    let mut link1_vel = 0.0;
+    let mut link2_pos_x = 0.0;
+    let mut link2_vel = 0.0;
 
+    for (rb_pos, rb_vel) in link1.iter() {
+        link1_pos_x = rb_pos.position.translation.x;
+        link1_vel = rb_vel.linvel[0];
+    }
+
+    for (rb_pos, rb_vel) in link2.iter() {
+        link2_pos_x = rb_pos.position.translation.x;
+        link2_vel = rb_vel.linvel[0];
+    }
+    // Update state using that info
+    state.observation = vec![link1_pos_x, link1_vel, link2_pos_x, link2_vel];
+    state.reward = link2_pos_x;
+    state.is_done = None;
+
+}
 // Makers
 struct Link1;
 struct Link2;
 struct Goal;
 
-fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfiguration>) {
-    // Scaling up, see https://rapier.rs/docs/user_guides/bevy_plugin/common_mistakes/#why-is-everything-moving-in-slow-motion
-    rapier_config.scale = 50.0;
+fn setup_environment(
+    mut commands: Commands,
+    mut rapier_config: ResMut<RapierConfiguration>,
+    config: Res<EnvironmentConfig>,
+) {
+    rapier_config.scale = RAPIER_SCALE;
 
-    let link_size = Vec2::new(0.2, 1.0);
+    if config.render {
+        let mut camera = OrthographicCameraBundle::new_2d();
+        camera.transform = Transform::from_translation(Vec3::new(0.0, 0.0, 100.0));
+        commands.spawn_bundle(camera);
+    }
 
     // Create static mount point
     let anchor = commands
@@ -56,7 +113,7 @@ fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfigu
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
-            shape: ColliderShape::ball(0.2),
+            shape: ColliderShape::ball(LINK_SIZE_HALF_X),
             //collider_type: ColliderType::Sensor,
             ..Default::default()
         })
@@ -65,17 +122,29 @@ fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfigu
         .id();
 
     // Create links(arms)
-    let l1 = create_link(
+    let link1 = create_link(
         &mut commands,
-        Vec2::new(0.0, -link_size.y),
-        link_size,
+        Vec2::new(0.0, -LINK_SIZE_HALF_Y),
         Color::GRAY,
         Link1,
     );
+    
+    if config.render {
+        // Add Joint Visualization - cosmetic only
+        commands.spawn_bundle(ColliderBundle {
+            shape: ColliderShape::ball(LINK_SIZE_HALF_X),
+            collider_type: ColliderType::Sensor,
+            ..Default::default()
+        }).insert(ColliderParent {
+            handle: link1.handle(),
+            pos_wrt_parent: Vec2::new(0.0, -LINK_SIZE_HALF_Y).into()
+        })
+        .insert(ColliderPositionSync::Discrete)
+        .insert(ColliderDebugRender::from(Color::BLACK));
+    }
     let l2 = create_link(
         &mut commands,
-        Vec2::new(0.0, -link_size.y * 3.0),
-        link_size,
+        Vec2::new(0.0, -LINK_SIZE_HALF_Y * 3.0),
         Color::GRAY,
         Link2,
     );
@@ -83,20 +152,20 @@ fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfigu
     // Add 1st Ball joint
     let joint = BallJoint::new(
         Vec2::ZERO.into(),                  // static anchor
-        Vec2::new(0.0, link_size.y).into(), // top of first link
+        Vec2::new(0.0, LINK_SIZE_HALF_Y).into(), // top of first link
     );
     commands
         .spawn()
-        .insert(JointBuilderComponent::new(joint, anchor, l1));
+        .insert(JointBuilderComponent::new(joint, anchor, link1));
 
     // Add 2nd Ball joint
     let joint2 = BallJoint::new(
-        Vec2::new(0.0, -link_size.y).into(), // bottom first link
-        Vec2::new(0.0, link_size.y).into(),  // top of second link
+        Vec2::new(0.0, -LINK_SIZE_HALF_Y).into(), // bottom first link
+        Vec2::new(0.0, LINK_SIZE_HALF_Y).into(),  // top of second link
     );
     commands
         .spawn()
-        .insert(JointBuilderComponent::new(joint2, l1, l2));
+        .insert(JointBuilderComponent::new(joint2, link1, l2));
 
     // Create the goal line
     commands
@@ -118,7 +187,6 @@ fn setup_physics(mut commands: Commands, mut rapier_config: ResMut<RapierConfigu
 fn create_link(
     commands: &mut Commands,
     pos: Vec2,
-    size: Vec2,
     color: Color,
     component: impl Component,
 ) -> Entity {
@@ -128,7 +196,7 @@ fn create_link(
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
-            shape: ColliderShape::cuboid(size.x, size.y),
+            shape: ColliderShape::cuboid(LINK_SIZE_HALF_X, LINK_SIZE_HALF_Y),
             material: ColliderMaterial {
                 restitution: 0.7,
                 ..Default::default()
@@ -142,16 +210,3 @@ fn create_link(
         .id()
 }
 
-fn keyboard_input(
-    mut rigid_bodies: Query<&mut RigidBodyForces, With<Link2>>,
-    keyboard: Res<Input<KeyCode>>,
-) {
-    for mut rb_forces in rigid_bodies.iter_mut() {
-        if keyboard.pressed(KeyCode::A) {
-            rb_forces.force = Vec2::new(-10.0, 0.0).into();
-        }
-        if keyboard.pressed(KeyCode::D) {
-            rb_forces.force = Vec2::new(10.0, 0.0).into();
-        }
-    }
-}

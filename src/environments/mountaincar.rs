@@ -1,4 +1,3 @@
-//use std::f32::consts::TAU;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use crate::environment::*;
@@ -52,7 +51,6 @@ fn setup_physics(
     // Scaling up, see https://rapier.rs/docs/user_guides/bevy_plugin/common_mistakes/#why-is-everything-moving-in-slow-motion
     rapier_config.scale = 50.0;
 
-    
 
     // To create the ground from list of points following sin curve
     let ground_width = 20.0f32; // assuming at origin
@@ -77,7 +75,6 @@ fn setup_physics(
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
-            // TODO: cloning because I need another copy for rendering for now
             shape: ColliderShape::polyline(vertices, None),
             ..Default::default()
         })

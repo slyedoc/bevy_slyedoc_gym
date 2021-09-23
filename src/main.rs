@@ -13,16 +13,12 @@ use clap::Clap;
 use config::Config;
 use environments::*;
 
-use crate::environment::{EnvironmentCounter, EnvironmentResetEvent};
+use crate::environment::{EnvironmentConfig, EnvironmentResetEvent};
 use crate::environments::acrobot::AcrobotPlugin;
 use crate::environments::cartpole::CartPolePlugin;
 use crate::environments::flappy::FlappyPlugin;
 use crate::environments::mountaincar::MountainCarPlugin;
 use crate::environments::pendulum::PendulumPlugin;
-use crate::models::neat::NeatMLPlugin;
-use crate::models::policy_gradient::PolicyGradientModelPlugin;
-use crate::models::ppo::PpoMLPlugin;
-use crate::models::ModelType;
 
 fn main() {
 
@@ -45,7 +41,9 @@ fn main() {
     }
 
     // Setup Common Resources
-    app.insert_resource(EnvironmentCounter::default())
+    app.insert_resource(EnvironmentConfig {
+        render: !config.simulation
+    })
         .add_event::<EnvironmentResetEvent>()
         .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
         .add_startup_system(setup_physics.system());
@@ -54,12 +52,13 @@ fn main() {
         app.add_plugin(RapierRenderPlugin);
     }
 
-    // Add enviroment
+    // Add environment
     match config.environment {
         EnvironmentType::Acrobot => app.add_plugin(AcrobotPlugin {
             render: !config.simulation,
         }),
         EnvironmentType::CartPole => app.add_plugin(CartPolePlugin {
+            human: config.human,
             render: !config.simulation,
         }),
         EnvironmentType::MountainCar => app.add_plugin(MountainCarPlugin {
@@ -72,18 +71,6 @@ fn main() {
             render: !config.simulation,
         }),
     };
-
-
-    if !config.human {
-
-        // If no human
-        match config.model {
-            ModelType::PolicyGradient => app.add_plugin(PolicyGradientModelPlugin),
-            ModelType::PPO => app.add_plugin(PpoMLPlugin),
-            ModelType::Neat => app.add_plugin(NeatMLPlugin),
-        };
-    }
-
     app.run();
 }
 

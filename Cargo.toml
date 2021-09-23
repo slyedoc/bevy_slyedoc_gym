@@ -30,6 +30,7 @@ rand_pcg = "0.3.1"
 failure = "0.1.8"
 ndarray = { version = "0.15.3" }
 neat = { git = "https://github.com/suhdonghwi/neat.git" }
+toml = "0.5.8"
 
 [patch.crates-io]
 bevy_rapier2d = { path = "../bevy_rapier/bevy_rapier2d" }
