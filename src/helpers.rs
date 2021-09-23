@@ -2,7 +2,14 @@ use std::fs;
 
 use neat::parameters::Parameters;
 
-fn _range_lerp( value: f32 , istart: f32, istop: f32, ostart: f32, ostop: f32) -> f32
+// Just used for const because Vec2 cant be
+pub struct V2<T> {
+    pub x: T,
+    pub y: T,
+}
+
+#[allow(dead_code)]
+pub fn range_lerp( value: f32 , istart: f32, istop: f32, ostart: f32, ostop: f32) -> f32
 {
     ostart + (ostop - ostart) * value / (istop - istart)
 }

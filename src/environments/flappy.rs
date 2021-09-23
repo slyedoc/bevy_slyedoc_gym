@@ -1,252 +1,323 @@
-use crate::{environment::*, models::neat::NeatML};
-use bevy::{ecs::component::Component, prelude::*};
+use crate::{helpers::V2, models::neat::NeatML};
+use bevy::{prelude::*, render::camera::Camera};
+use bevy_prototype_debug_lines::DebugLines;
 use bevy_rapier2d::prelude::*;
 use rand::Rng;
+use std::{ops::Range, time::Duration};
+
 pub struct FlappyPlugin {
+    pub config: FlappyConfig,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FlappyConfig {
     pub render: bool,
+    pub human: bool,
 }
 
-impl Plugin for FlappyPlugin {
-    fn build(&self, app: &mut AppBuilder) {
-
-        let model = NeatML::new("./params/flappy.toml", true );
-        
-        app.add_startup_system(setup_environment.system())
-            .insert_resource(model)
-            .add_system(scroll_tubes.system())
-            .add_system(catchup_bird.system())
-            .add_system_to_stage(CoreStage::First, update_current_tube.system())
-            .add_system_to_stage(CoreStage::PreUpdate, update_state.system())
-            .add_system_to_stage(CoreStage::Update, update_action.exclusive_system())
-            .add_system_to_stage(CoreStage::PostUpdate, take_action.system())
-            .add_system(reset_listener.system());
-
-        if self.render {
-            app.add_system(keyboard_input.system());
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FlappyState {
+    Loading,
+    Playing,
+    Resetting,
 }
 
-fn keyboard_input(mut env_state: ResMut<EnvironmentState>, keyboard_input: Res<Input<KeyCode>>) {
-    if keyboard_input.pressed(KeyCode::Space) {
-        env_state.action = Some(0);
-    }
-}
-
-// Makers to identify entities
-struct Tube(TubeType);
-struct TubeCurrent;
 struct Bird {
     index: usize,
 }
+struct Tube {
+    current: bool,
+    top_lip: f32,
+    bottom_lip: f32,
+}
 
-// Marking tubes so on respawn can spawn them as pair
-enum TubeType {
-    Top,
-    Bottom,
+struct TubeLastGapOffset(f32);
+struct Population(usize);
+
+impl Plugin for FlappyPlugin {
+    fn build(&self, app: &mut AppBuilder) {
+        app.insert_resource(self.config)
+            .insert_resource(TubeLastGapOffset(0.0))
+            .add_state(FlappyState::Loading)
+            .add_system_set(
+                SystemSet::on_enter(FlappyState::Loading).with_system(setup_environment.system()),
+            )
+            .add_system_set(
+                SystemSet::on_update(FlappyState::Playing)
+                    .with_system(scroll_tubes.system())
+                    .with_system(catchup_bird.system()),
+            )
+            .add_system_set(
+                SystemSet::on_enter(FlappyState::Resetting).with_system(clear_environment.system()),
+            );
+
+        if self.config.human {
+            println!("Press Space to jump, Escape to exit");
+            app.insert_resource(Population(1)).add_system_set_to_stage(
+                CoreStage::Update,
+                SystemSet::on_update(FlappyState::Playing).with_system(update_human.system()),
+            );
+        } else {
+            let model = NeatML::new("./params/flappy.toml", Duration::new(0, 0), true);
+            app.insert_resource(Population(model.population))
+                .insert_resource(model)
+                .add_system_set_to_stage(
+                    CoreStage::Update,
+                    SystemSet::on_update(FlappyState::Playing)
+                        .with_system(update_neat.system())
+                        .with_system(next_generation_check.system()),
+                );
+        }
+
+        if self.config.human && self.config.render {}
+    }
 }
 
 const RAPIER_SCALE: f32 = 50.0; // Very useful to zoom in and out to see whats going on
                                 // Also see https://rapier.rs/docs/user_guides/bevy_plugin/common_mistakes/#why-is-everything-moving-in-slow-motion
-
 const TUBE_SIZE_HALF_X: f32 = 1.0;
 const TUBE_SIZE_HALF_Y: f32 = 10.0;
-const TUBE_DESPAWN_LIMIT: f32 = -15.0;
-const TUBE_SPACING: f32 = 10.0;
-const TUBE_GAP_SIZE_HALF: f32 = 3.0; // Control gap size between tubes in a set
-const TUBE_GAP_OFFSET_MAX: f32 = 4.0; // Control gap range off of y axis
-const TUBE_SPEED: f32 = 0.1;
+const TUBE_SPACING: f32 = 12.0;
+const TUBE_GAP_SIZE_HALF: f32 = 2.0; // Control gap size between tubes in a set
+const TUBE_GAP_OFFSET_MAX: f32 = 6.0; // Control gap range off of y axis
+const TUBE_GAP_CLAMP_HALF: f32 = 10.0; // Removes impossible height changes
+const TUBE_SPEED: f32 = 0.10;
 const TUBE_COUNT: usize = 5;
-const BIRD_SIZE_HALF: f32 = 0.5;
-const BIRD_RESET_LIMIT_Y: f32 = -10.0;
-const BIRD_RESET_LIMIT_X: f32 = -4.0;
-const ACTION_FORCE: f32 = 150.0;
+const TUBE_DESPAWN_LIMIT: f32 = -2.0 * TUBE_SPACING;
+const BIRD_SIZE_HALF: V2<f32> = V2 { x: 0.0, y: 0.0 };
+const ACTION_FORCE: f32 = 250.0;
+const BIRD_LIMIT_X: Range<f32> = -1.0..4.0;
+const BIRD_LIMIT_Y: Range<f32> = -8.0..8.0;
+
+fn update_human(
+    keyboard_input: Res<Input<KeyCode>>,
+    mut birds: Query<(&RigidBodyPosition, &mut RigidBodyVelocity), With<Bird>>,
+    params: Res<IntegrationParameters>,
+    mut state: ResMut<State<FlappyState>>,
+) {
+    for (rb_pos, mut rb_vel) in birds.iter_mut() {
+        if keyboard_input.pressed(KeyCode::Space) {
+            rb_vel.linvel = Vec2::new(0.0, ACTION_FORCE * params.dt).into();
+        }
+
+        if is_bird_dead(rb_pos.position.translation.x, rb_pos.position.translation.y) {
+            state.set(FlappyState::Resetting).unwrap();
+        }
+    }
+}
 
 // Update Current State of the environment
-fn update_state(
-    mut state: ResMut<EnvironmentState>,
-    birds: Query<&RigidBodyPosition, With<Bird>>,
-    tubes: Query<(&RigidBodyPosition, &Tube), With<TubeCurrent>>,
-    mut ev_reset: EventWriter<EnvironmentResetEvent>,
-    mut counter: Local<f32>,
-) {
-    // Find our observables
-    let mut bird_pos = Vec2::new(0.0, 0.0);
-    for rb_pos in birds.iter() {
-        bird_pos.x =  rb_pos.position.translation.x;
-        bird_pos.y =  rb_pos.position.translation.y;
-    }
-
-    // Find the lip on the next tubes we need to navigate
-    let mut tube_top_lip = 0.0;
-    let mut tube_bottom_lip = 0.0;
-    for  (rb_pos, tube) in tubes.iter() {
-        let y = rb_pos.position.translation.y;
-        match tube.0 {
-            TubeType::Top => tube_top_lip = y - TUBE_SIZE_HALF_Y,
-            TubeType::Bottom => tube_bottom_lip = y + TUBE_SIZE_HALF_Y,
-        }
-    }
-    let top_offset =  tube_top_lip - (bird_pos.y + BIRD_SIZE_HALF);
-    let bot_offset =  (bird_pos.y - BIRD_SIZE_HALF) - tube_bottom_lip;
-
-    // Set our observation
-    state.observation = vec![bird_pos.y, top_offset, bot_offset];
-    state.reward =  *counter;
-    let done = reset_check(bird_pos);
-    state.is_done = Some(done);
-
-    if done {
-        ev_reset.send(EnvironmentResetEvent);
-        *counter = 0.0
-    } else {
-        *counter += 1.0;
-    }
-}
-
-fn update_action(world: &mut World) {
-    let world_cell = world.cell();
-
-    // Get env state and run it though our model giving us an action
-    let mut m = world_cell.get_non_send_mut::<NeatML>().unwrap();
-    let mut env_state = world_cell.get_resource_mut::<EnvironmentState>().unwrap();
-
-    let action = m.step(&env_state.observation, env_state.reward,  env_state.is_done.unwrap());
-    env_state.action = Some(action);
-}
-
-fn take_action(
-    mut env_state: ResMut<EnvironmentState>,
-    mut bird: Query<&mut RigidBodyVelocity, With<Bird>>,
+fn update_neat(
+    mut commands: Commands,
+    mut birds: Query<(Entity, &Bird, &RigidBodyPosition, &mut RigidBodyVelocity)>,
+    tubes: Query<&Tube>,
+    mut neat: ResMut<NeatML>,
     params: Res<IntegrationParameters>,
+    time: Res<Time>,
 ) {
-    if let Some(action) = env_state.action {
-        for mut rb_vel in bird.iter_mut() {
-            match action {
-                0 => {
-                    rb_vel.linvel = Vec2::new(0.0, ACTION_FORCE * params.dt).into();
-                }
-                1 => {} // Do nothing
-                _ => panic!("action invalid: {}", action),
+    // Find the next tube openings
+    let (mut tube_top_lip, mut tube_bottom_lip) = (0.0, 0.0);
+    for tube in tubes.iter().filter(|t| t.current) {
+        tube_top_lip = tube.top_lip;
+        tube_bottom_lip = tube.bottom_lip;
+    }
+
+    // For each bird, see if its dead, if not figure out its observables, then perform its action
+    for (e, bird, rb_pos, mut rb_vel) in birds.iter_mut() {
+        let bird_pos_y = rb_pos.position.translation.y;
+
+        if is_bird_dead(rb_pos.position.translation.x, bird_pos_y) {
+            neat.record_complete_agent(bird.index, time.time_since_startup());
+            commands.entity(e).despawn_recursive();
+        } else {
+            // TODO: the original code had this translation step, don't think its needed
+            // translate those positions to be relative to the bird,
+            // let tube_top_lip = tube_top_lip - (bird_pos_y + BIRD_SIZE_HALF);
+            // let tube_bottom_lip = (bird_pos_y - BIRD_SIZE_HALF) - tube_bottom_lip;
+
+            // Preform our action
+            let output = neat
+                .pool
+                .activate_nth(
+                    bird.index,
+                    &[
+                        bird_pos_y as f64,
+                        tube_top_lip as f64,
+                        tube_bottom_lip as f64,
+                    ],
+                )
+                .unwrap();
+
+            if output[0] > 0.5 {
+                // Jump
+                rb_vel.linvel = Vec2::new(0.0, ACTION_FORCE * params.dt).into();
             }
         }
-        // Clear after use for now
-        env_state.action = None;
     }
 }
 
+fn next_generation_check(
+    mut neat: ResMut<NeatML>,
+    birds: Query<&Bird>,
+    mut state: ResMut<State<FlappyState>>,
+    time: Res<Time>,
+) {
+    // Are all the birds dead?
+    if birds.iter().count() == 0 {
+        // Yes, run neat though a generation
+        neat.next_generation(time.time_since_startup());
 
+        // Reset
+        state.set(FlappyState::Resetting).unwrap();
+    }
+}
 
-fn reset_check(bird_pos: Vec2) -> bool {
-    let mut result = false;
-    if bird_pos.x < BIRD_RESET_LIMIT_X {
-        result = true
+fn is_bird_dead(bird_pos_x: f32, bird_pos_y: f32) -> bool {
+    // if bird is in the range, its not dead
+    if BIRD_LIMIT_X.contains(&bird_pos_x) && BIRD_LIMIT_Y.contains(&bird_pos_y) {
+        return false;
     }
-    if bird_pos.y < BIRD_RESET_LIMIT_Y {
-        result = true
-    }
-    result
+    true
 }
 
 fn setup_environment(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
-    config: Res<EnvironmentConfig>,
+    config: ResMut<FlappyConfig>,
+    population: Res<Population>,
+    mut state: ResMut<State<FlappyState>>,
+    camera: Query<&Camera>,
+    mut gap_offset: ResMut<TubeLastGapOffset>,
 ) {
     rapier_config.scale = RAPIER_SCALE;
 
-    if config.render {
+    if config.render && camera.iter().count() == 0 {
         let mut camera = OrthographicCameraBundle::new_2d();
         camera.transform = Transform::from_translation(Vec3::new(0.0, 0.0, 50.0));
         commands.spawn_bundle(camera);
     }
 
-    spawn_env(&mut commands);
-}
-
-// Assumes clean slate, called at startup and on reset events
-fn spawn_env(commands: &mut Commands) {
-    // Create the Bird
-    commands
-        .spawn_bundle(RigidBodyBundle {
-            position: Vec2::new(0.0, 0.0).into(),
-            body_type: RigidBodyType::Dynamic,
-            ..Default::default()
-        })
-        .insert_bundle(ColliderBundle {
-            shape: ColliderShape::cuboid(BIRD_SIZE_HALF, BIRD_SIZE_HALF),
-            collider_type: ColliderType::Solid,
-            ..Default::default()
-        })
-        .insert(ColliderPositionSync::Discrete)
-        .insert(ColliderDebugRender::from(Color::RED))
-        .insert(Bird { index: 0 })
-        .id();
-
-    // setup tubes
-    for x in 0..TUBE_COUNT {
-        spawn_tube_set(commands, x as f32 * TUBE_SPACING);
+    // Create the Birds
+    for i in 0..population.0 {
+        commands
+            .spawn_bundle(RigidBodyBundle {
+                position: Vec2::new(0.0, 0.0).into(),
+                body_type: RigidBodyType::Dynamic,
+                ..Default::default()
+            })
+            .insert_bundle(ColliderBundle {
+                shape: ColliderShape::cuboid(BIRD_SIZE_HALF.x, BIRD_SIZE_HALF.y),
+                collider_type: ColliderType::Solid,
+                flags: ColliderFlags {
+                    collision_groups: InteractionGroups::new(0b0001, 0b0010),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .insert(ColliderPositionSync::Discrete)
+            .insert(ColliderDebugRender::from(Color::RED))
+            .insert(Bird { index: i })
+            .id();
     }
+
+    // Create tubes
+    for x in 0..TUBE_COUNT {
+        spawn_tube_set(
+            &mut commands,
+            (x + 1) as f32 * TUBE_SPACING,
+            &mut gap_offset,
+        );
+    }
+
+    state.set(FlappyState::Playing).unwrap();
 }
 
-fn spawn_tube_set(commands: &mut Commands, pos_x: f32) {
+fn spawn_tube_set(commands: &mut Commands, pos_x: f32, last_gap_offset: &mut TubeLastGapOffset) {
     // figure out where the tubes should be
     let mut rng = rand::thread_rng();
-    let gap_offset = rng.gen_range(-TUBE_GAP_OFFSET_MAX..TUBE_GAP_OFFSET_MAX);
+    let gap_offset = rng
+        .gen_range(-TUBE_GAP_OFFSET_MAX..TUBE_GAP_OFFSET_MAX)
+        .clamp(
+            last_gap_offset.0 - TUBE_GAP_CLAMP_HALF,
+            last_gap_offset.0 + TUBE_GAP_CLAMP_HALF,
+        ); // Remove impossible height changes
+    last_gap_offset.0 = gap_offset;
+
     let spacing = TUBE_SIZE_HALF_Y + TUBE_GAP_SIZE_HALF;
+    let top_pos = Vec2::new(0.0, spacing + gap_offset);
+    let bottom_pos = Vec2::new(0.0, -spacing + gap_offset);
 
-    //println!("spacing: {}, gap_offset: {}", spacing, gap_offset);
-    spawn_tube(
-        commands,
-        Vec2::new(pos_x, spacing + gap_offset),
-        Tube(TubeType::Top),
-    );
-    spawn_tube(
-        commands,
-        Vec2::new(pos_x, -spacing + gap_offset),
-        Tube(TubeType::Bottom),
-    );
-}
-
-fn spawn_tube(commands: &mut Commands, pos: Vec2, tube_type: impl Component) -> Entity {
     commands
         .spawn_bundle(RigidBodyBundle {
-            position: pos.into(),
+            position: Vec2::new(pos_x, 0.0).into(),
             body_type: RigidBodyType::Static,
             ..Default::default()
         })
-        .insert_bundle(ColliderBundle {
-            collider_type: ColliderType::Solid,
-            shape: ColliderShape::cuboid(TUBE_SIZE_HALF_X, TUBE_SIZE_HALF_Y),
-            ..Default::default()
+        .with_children(|mut parent| {
+            create_child_tubes(&mut parent, top_pos);
+            create_child_tubes(&mut parent, bottom_pos);
         })
         .insert(ColliderPositionSync::Discrete)
         .insert(ColliderDebugRender::from(Color::GREEN))
-        .insert(tube_type)
-        .id()
+        .insert(Tube {
+            top_lip: TUBE_GAP_SIZE_HALF + gap_offset,
+            bottom_lip: -TUBE_GAP_SIZE_HALF + gap_offset,
+            current: false,
+        })
+        .id();
+}
+
+fn create_child_tubes(parent: &mut ChildBuilder, pos: Vec2) {
+    parent
+        .spawn_bundle(ColliderBundle {
+            position: pos.into(),
+            collider_type: ColliderType::Solid,
+            shape: ColliderShape::cuboid(TUBE_SIZE_HALF_X, TUBE_SIZE_HALF_Y),
+            flags: ColliderFlags {
+                collision_groups: InteractionGroups::new(0b0010, 0b0001),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(ColliderPositionSync::Discrete)
+        .insert(ColliderDebugRender::from(Color::GREEN));
 }
 
 fn scroll_tubes(
     mut commands: Commands,
-    mut tube_set: Query<(Entity, &mut RigidBodyPosition, &Tube)>,
+    mut tubes: Query<(Entity, &mut RigidBodyPosition, &mut Tube)>,
+    mut lines: ResMut<DebugLines>,
+    mut gap_offset: ResMut<TubeLastGapOffset>,
 ) {
-    for (e, mut rb_pos, tube) in tube_set.iter_mut() {
+    for (e, mut rb_pos, mut tube) in tubes.iter_mut() {
         rb_pos.position.translation.x -= TUBE_SPEED;
 
-        // despawn when off screen and spawn new tube
-        if rb_pos.position.translation.x < TUBE_DESPAWN_LIMIT {
-            commands.entity(e).despawn();
+        let x = rb_pos.position.translation.x;
 
-            match tube.0 {
-                TubeType::Top => spawn_tube_set(
-                    &mut commands,
-                    TUBE_COUNT as f32 * TUBE_SPACING + TUBE_DESPAWN_LIMIT,
-                ),
-                TubeType::Bottom => {}
-            }
+        // despawn when off screen and spawn new tube
+        if x < TUBE_DESPAWN_LIMIT {
+            commands.entity(e).despawn_recursive();
+
+            spawn_tube_set(
+                &mut commands,
+                TUBE_COUNT as f32 * TUBE_SPACING + TUBE_DESPAWN_LIMIT,
+                &mut gap_offset,
+            );
+        }
+
+        // Update Tube Status
+        if x > 0.0 && x < TUBE_SPACING {
+            tube.current = true;
+
+            // Draw Debug Line
+            let start = Vec3::new(0.0, tube.top_lip * RAPIER_SCALE, 0.0);
+            let end = Vec3::new(0.0, tube.bottom_lip * RAPIER_SCALE, 0.0);
+            lines.line_colored(start, end, 0.0, Color::BLUE);
+        } else {
+            tube.current = false;
         }
     }
-}     
+}
 
 // The bird can get stuck behind tubes and falls behind and skid off top of tubes
 // I could just trigger game over when a touch occurs but I like the effect
@@ -254,53 +325,21 @@ fn scroll_tubes(
 fn catchup_bird(mut bird: Query<&mut RigidBodyPosition, With<Bird>>) {
     for mut rb_pos in bird.iter_mut() {
         // poor mans lerp
-        let x = rb_pos.position.translation.x;
-        if x < 0.0 {
-            rb_pos.position.translation.x -= x / 60.0;
-        }
+        rb_pos.position.translation.x -= rb_pos.position.translation.x / 60.0;
     }
 }
 
-fn update_current_tube(
+fn clear_environment(
     mut commands: Commands,
-     query_set: QuerySet<(
-            Query<(Entity, &RigidBodyPosition), (With<Tube>, Without<TubeCurrent>)>,
-            Query<(Entity, &RigidBodyPosition), With<TubeCurrent>>,
-        )>
-) {
-    // Find next tube and mark it
-    for (e, rb_pos) in query_set.q0().iter() {
-        if rb_pos.position.translation.x < 0.0 && rb_pos.position.translation.x < TUBE_SPACING {
-            commands.entity(e).insert(TubeCurrent);
-        }
-    }
-
-    // Remove any tubes that should be marked
-    for (e, rb_pos) in query_set.q1().iter() {
-        if rb_pos.position.translation.x < 0.0 || rb_pos.position.translation.x > TUBE_SPACING {
-            commands.entity(e).remove::<TubeCurrent>();
-        }
-    }
-}
-
-// Want to let the models trigger reset, so using events
-fn reset_listener(
-    mut commands: Commands,
-    mut ev_reset: EventReader<EnvironmentResetEvent>,
     query_set: QuerySet<(Query<Entity, With<Bird>>, Query<Entity, With<Tube>>)>,
+    mut state: ResMut<State<FlappyState>>,
 ) {
-    let mut reset = false;
-    for _ in ev_reset.iter() {
-        reset = true;
+    for e in query_set.q0().iter() {
+        commands.entity(e).despawn_recursive();
     }
-    if reset {
-        for e in query_set.q0().iter() {
-            commands.entity(e).despawn_recursive();
-        }
-        for e in query_set.q1().iter() {
-            commands.entity(e).despawn_recursive();
-        }
+    for e in query_set.q1().iter() {
+        commands.entity(e).despawn_recursive();
+    }
 
-        spawn_env(&mut commands);
-    }
+    state.set(FlappyState::Loading).unwrap();
 }

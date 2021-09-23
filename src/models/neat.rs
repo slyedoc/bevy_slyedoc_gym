@@ -5,14 +5,26 @@
 use std::time::Duration;
 
 use crate::helpers;
-use bevy::utils::HashMap;
 use neat::innovation_record::InnovationRecord;
-use neat::network::Network;
 use neat::network::feedforward::Feedforward;
+use neat::network::Network;
 use neat::pool::Pool;
 
+pub struct NeatML {
+    innov_record: InnovationRecord,
+    pub pool: Pool<Feedforward>,
+    pub population: usize,
+    generation_start: Duration,
+    complete_agents: Vec<CompleteAgent>,
+}
+
+pub struct CompleteAgent {
+    pub index: usize,
+    pub fitness: f64,
+}
+
 impl NeatML {
-    pub fn new(path: &str, verbosity: bool) -> Self {
+    pub fn new(path: &str, start: Duration, verbosity: bool) -> Self {
         let verbosity = match verbosity {
             true => 1,
             false => 0,
@@ -25,55 +37,45 @@ impl NeatML {
             innov_record: innov_record,
             pool: pool,
             population: params.population,
-            generation_start: Duration::new(0, 0),
+            generation_start: start,
+            complete_agents: Vec::new(),
         }
     }
-}
+
+    pub fn next_generation(&mut self, time: Duration) {
+        let generation = self.pool.generation();
 
 
+        if self.complete_agents.len() > 0 {
+            // build up fitness list, and reset complete agents
+            self.complete_agents.sort_by(|a, b| a.index.cmp(&b.index));
+            let fitness_list: Vec<f64> = self
+                .complete_agents
+                .iter()
+                .map(|a| a.fitness as f64)
+                .collect();
+            self.complete_agents.clear();
 
-pub struct NeatML {
-    innov_record: InnovationRecord,
-    pool: Pool<Feedforward>,
-    pub population: usize,
-    generation_start: Duration,
-}
+            let best_network = self
+                .pool
+                .evaluate(|i, network| network.evaluate(fitness_list[i]))
+                .clone();
+            let best_fitness = best_network.fitness().unwrap();
 
-impl NeatML {
-    pub fn step(&mut self, observations: &[f32], reward: f32, done: bool) -> usize {
-        let mut action: usize;
-        let output = self
-            .pool
-            .activate_nth(
-                0,
-                &[
-                    observations[0] as f64,
-                    observations[1] as f64,
-                    observations[2] as f64,
-                ],
-            )
-            .unwrap();
+            println!(
+                " best_fitness: {}, generation: {}",
+                best_fitness, generation
+            );
 
-        if output[0] > 0.5 {
-            action = 0; // jump
+            self.pool.evolve(&mut self.innov_record);
+            self.generation_start = time;
         }
-        action = 1; // nothing
+    }
 
-        if done {
-             let generation = self.pool.generation();
-             let fitness_list: Vec<f64> = vec![reward as f64; 1];
-
-             let mut best_network = self
-                 .pool
-                 .evaluate(|i, network| network.evaluate(fitness_list[i]))
-                 .clone();
-             let best_fitness = best_network.fitness().unwrap();
-
-             println!(" best_fitness: {}, generation: {}", best_fitness, generation);
-
-             self.pool.evolve(&mut self.innov_record);
-        }
-        println!("action: {}", action);
-        action
+    pub fn record_complete_agent(&mut self, index: usize, time: Duration) {
+        self.complete_agents.push(CompleteAgent {
+            index: index,
+            fitness: (time - self.generation_start).as_secs_f64(),
+        })
     }
 }

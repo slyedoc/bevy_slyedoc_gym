@@ -1,4 +1,3 @@
-pub mod ppo;
 pub mod policy_gradient;
 pub mod neat;
 
@@ -8,7 +7,6 @@ use bevy::prelude::World;
 
 #[derive(Clone, Debug)]
 pub enum ModelType {
-    PPO,
     PolicyGradient,
     Neat,
 }
@@ -18,7 +16,6 @@ impl FromStr for ModelType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "ppo" => Ok(ModelType::PPO),
             "policy_gradient" => Ok(ModelType::PolicyGradient),
             "pg" => Ok(ModelType::PolicyGradient),
             "neat" => Ok(ModelType::Neat),

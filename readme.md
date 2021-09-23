@@ -29,7 +29,7 @@ FLAGS:
 OPTIONS:
     -e, --environment <environment>    [default: acrobot] [possible values: acrobot,
                                      cartpole, mountaincar, pendulum, flappy]
-    -m, --model <model>              [default: pg] [possible values: ppo, pg]
+
 ```
 
 I use cargo watch for a fast development cycle, example command:

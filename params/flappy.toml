@@ -1,11 +1,12 @@
 input_number = 3
 output_number = 1
-population = 50
+population = 100 # can ran 500 ok, but not a 1k
+
 
 hidden_activation = 'Sigmoid'
 output_activation = 'Sigmoid'
 
-[mutation] 
+[mutation]
 weight_perturbation = 0.7
 weight_assign = 0.1
 add_connection = 0.5

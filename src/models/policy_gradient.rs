@@ -1,111 +1,63 @@
 // Policy gradient example.
 
 // This is based mainly on tch-rs examples and of course OpenAI Gym
-use bevy::prelude::*;
 use tch::{
     nn::{self, OptimizerConfig},
     Kind::{self, Float},
     Tensor,
 };
 
-use crate::environment::*;
-
 pub struct PolicyGradientModel {
     pub model: nn::Sequential,
     pub opt: nn::Optimizer<nn::Adam>,
-
-    // History states
-    // Reusing EnvironmentState, but this could use your own struct
-    pub history: Vec<EnvironmentState>,
-
-    // Few counters
-    pub epoch: usize,
-    pub epoch_max: usize,
-
-    pub step: usize,
-    pub step_max: usize,
+    history: Vec<HistoryState>,
 }
 
-impl FromWorld for PolicyGradientModel {
-    fn from_world(world: &mut World) -> Self {
-        let space = world
-            .get_resource::<Environment>()
-            .expect("Res<EnvSpace> not found.");
+struct HistoryState {
+    pub reward: f32,
+    pub is_done: bool,
+    pub action: f32,
+    pub observations: Vec<f32>,
+}
+
+impl PolicyGradientModel {
+    pub fn new(input_size: i64, output: i64) -> Self {
 
         let vs = nn::VarStore::new(tch::Device::Cpu);
-
         let p = &vs.root();
-        let observation_space = space.observation_space as i64;
-        let action_space = space.action_space as i64;
-
-        println!("shape: in {}, out {}", observation_space, action_space);
 
         let model = nn::seq()
             .add(nn::linear(
                 p / "lin1",
-                observation_space,
+                input_size,
                 32,
                 Default::default(),
             ))
             .add_fn(|xs| xs.tanh())
-            .add(nn::linear(p / "lin2", 32, action_space, Default::default()));
+            .add(nn::linear(p / "lin2", 32, output, Default::default()));
 
         Self {
             model: model,
             opt: nn::Adam::default().build(&vs, 1e-2).unwrap(),
             history: vec![],
-
-            epoch: 0,
-            epoch_max: 50,
-            step: 0,
-            step_max: 5000,
         }
     }
-}
 
-impl PolicyGradientModel {
-    
-    pub fn step(&mut self, observations: &[f32], _reward: f32, done: Option<bool>) -> usize {
-
-        //Use existing model to find an action
-        let action = tch::no_grad(|| {
-            Tensor::of_slice(observations)
-                .unsqueeze(0)
-                .apply(&self.model)
-                .softmax(1, Kind::Float)
-                .multinomial(1, true)
+    pub fn record_history(&mut self, observations: Vec<f32>, reward: f32, is_done: bool, action: f32) {
+        self.history.push(HistoryState {
+            reward: reward,
+            is_done: is_done,
+            action: action,
+            observations: observations,
         });
-        let action = f32::from(action) as usize;
-
-
-        if self.step > self.step_max {
-            let sum_r: f32 = self.history.iter().map(|s| s.reward ).sum();
-            let episodes: f32 = self.history.iter().filter(|s| s.is_done.unwrap() ).count() as f32;
-
-            println!(
-                "epoch: {:<3} episodes: {:<5} avg reward per episode: {:.2}",
-                self.epoch,
-                episodes,
-                sum_r / episodes
-            );
-
-            self.train();
-            self.history.clear();
-            
-            self.step = 0;
-            self.epoch += 1;
-        }
-        self.step += 1;
-
-        action
     }
 
-    fn train(&mut self) {
+    pub fn train(&mut self) {
         let batch_size = self.history.len() as i64;
         let actions: Vec<i64> = self
             .history
             .iter()
-            .map(|s| s.action.unwrap() as i64)
+            .map(|s| s.action as i64)
             .collect();
         let actions = Tensor::of_slice(&actions).unsqueeze(1);
         let rewards = Tensor::of_slice(&self.accumulate_rewards()).to_kind(Kind::Float);
@@ -114,7 +66,7 @@ impl PolicyGradientModel {
         let obs: Vec<Tensor> = self
             .history
             .iter()
-            .map(|s| Tensor::of_slice(&s.observation).to_kind(Kind::Float))
+            .map(|s| Tensor::of_slice(&s.observations).to_kind(Kind::Float))
             .collect();
         let logits = Tensor::stack(&obs, 0).apply(&self.model);
         let log_probs =
@@ -127,7 +79,7 @@ impl PolicyGradientModel {
         let mut rewards: Vec<f32> = self.history.iter().map(|s| s.reward).collect();
         let mut acc_reward = 0f32;
         for (i, reward) in rewards.iter_mut().enumerate().rev() {
-            if self.history[i].is_done.unwrap() {
+            if self.history[i].is_done {
                 acc_reward = 0.0;
              }
              acc_reward += *reward;

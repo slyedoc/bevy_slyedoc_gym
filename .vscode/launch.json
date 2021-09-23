@@ -22,7 +22,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["-e", "flappy", "-h"],
+            "args": ["-e", "cartpole", "-h"],
             "env": {
                 
             },

@@ -3,8 +3,10 @@ pub mod cartpole;
 pub mod mountaincar;
 pub mod pendulum;
 pub mod flappy;
+pub mod breakout;
 
 use std::{fmt, str::FromStr};
+
 
 #[derive(Clone, Debug)]
 pub enum EnvironmentType {
@@ -12,8 +14,17 @@ pub enum EnvironmentType {
     CartPole,
     MountainCar,
     Pendulum,
-    Flappy
+    Flappy,
+    Breakout
 }
+
+#[allow(dead_code)]
+pub enum EnvironmentMode {
+    RenderHuman,
+    Render,
+    Simulation,
+}
+
 
 impl FromStr for EnvironmentType {
     type Err = &'static str;
@@ -25,7 +36,8 @@ impl FromStr for EnvironmentType {
             "mountaincar" => Ok(EnvironmentType::MountainCar),
             "pendulum" => Ok(EnvironmentType::Pendulum),
             "flappy" => Ok(EnvironmentType::Flappy),
-            _ => Err("no enviroment match"),
+            "breakout" => Ok(EnvironmentType::Breakout),
+            _ => Err("No environment match!"),
         }
     }
 }
@@ -38,6 +50,7 @@ impl fmt::Display for EnvironmentType {
             EnvironmentType::MountainCar => write!(f, "Mountain Car"),
             EnvironmentType::Pendulum => write!(f, "Pendulum"),
             EnvironmentType::Flappy => write!(f, "Flappy"),
+            EnvironmentType::Breakout => write!(f, "Breakout"),
         }
     }
 }
