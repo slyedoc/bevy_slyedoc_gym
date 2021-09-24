@@ -19,6 +19,7 @@ pub enum EnvironmentType {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum EnvironmentMode {
     RenderHuman,
     Render,
@@ -35,7 +36,7 @@ impl FromStr for EnvironmentType {
             "cartpole" => Ok(EnvironmentType::CartPole),
             "mountaincar" => Ok(EnvironmentType::MountainCar),
             "pendulum" => Ok(EnvironmentType::Pendulum),
-            "flappy" => Ok(EnvironmentType::Flappy),
+             "flappy" => Ok(EnvironmentType::Flappy),
             "breakout" => Ok(EnvironmentType::Breakout),
             _ => Err("No environment match!"),
         }

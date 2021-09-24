@@ -1,11 +1,21 @@
 use std::fs;
 
+use bevy::{ecs::component::Component, prelude::*};
+use bevy_inspector_egui::*;
 use neat::parameters::Parameters;
 
 // Just used for const because Vec2 cant be
+#[derive(Inspectable,Debug)]
 pub struct V2<T> {
     pub x: T,
     pub y: T,
+}
+
+#[allow(dead_code)]
+pub fn cleanup_system<T: Component>(mut commands: Commands, q: Query<Entity, With<T>>) {
+    for e in q.iter() {
+        commands.entity(e).despawn_recursive();
+    }
 }
 
 #[allow(dead_code)]

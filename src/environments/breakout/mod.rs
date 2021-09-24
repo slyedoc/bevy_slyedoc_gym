@@ -1,45 +1,79 @@
-use crate::{
-    helpers::{range_lerp, V2},
-    models::neat::NeatML,
-};
+mod human;
+mod neat;
+
+use self::human::*;
+use self::neat::*;
+use crate::helpers::{range_lerp, V2};
 use bevy::{ecs::component::Component, prelude::*};
+use bevy_inspector_egui::*;
 use bevy_rapier2d::prelude::*;
 use rand::Rng;
-use std::ops::Range;
 
-const RAPIER_SCALE: f32 = 50.0;
-const PLAYER_SIZE_HALF: V2<f32> = V2 { x: 1.0, y: 0.1 };
-const PLAYER_SPEED: f32 = 200.0;
-const PLAYER_COLOR: Color = Color::BLUE;
-const BOARD_SIZE_HALF: V2<f32> = V2 { x: 4.0, y: 6.0 };
-const BOARD_LINE_SIZE_HALF: f32 = 0.1;
-const BOARD_COLOR: Color = Color::BLUE;
-const BRICK_GRID: V2<usize> = V2 { x: 4, y: 2 };
-const BALL_SIZE_HALF: f32 = 0.1;
-const BALL_INIT_X_RANGE: Range<f32> = -1.0..1.0;
-const BALL_INIT_Y: f32 = 5.0;
-
-#[derive(Copy, Clone)]
+#[derive(Inspectable, Debug)]
 pub struct BreakoutConfig {
+    // environment settings
+    #[inspectable(ignore)]
     pub render: bool,
+    #[inspectable(ignore)]
     pub human: bool,
+    pub rapier_scale: f32,
+
+    // breakout settings
+    pub player_size_half: Vec2,
+    pub player_speed: f32,
+    pub player_color: Color,
+    pub board_size_half: Vec2,
+    pub board_line_size_half: f32,
+    pub board_color: Color,
+    pub brick_grid: V2<usize>,
+    pub brick_color: Color,
+    pub ball_size_half: f32,
+    pub ball_init_x_range: (f32, f32),
+    pub ball_init_y: f32,
+}
+
+
+impl Default for BreakoutConfig {
+    fn default() -> Self {
+        Self {
+            render: true,
+            human: true,
+            rapier_scale: 50.0,
+            player_size_half: Vec2::new(1.0, 0.1),
+            player_speed: 1.0,
+            player_color: Color::BLUE,
+            board_size_half: Vec2::new(4.0, 6.0),
+            board_line_size_half: 0.1,
+            board_color: Color::BLUE,
+            brick_grid: V2 { x: 6, y: 8 },
+            brick_color: Color::GRAY,
+            ball_size_half: 0.1,
+            ball_init_x_range: (-2.0, 2.0),
+            ball_init_y: 5.0,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub struct BreakoutInstance {
+    pub index: usize,
+    pub origin: Vec2,
 }
 
 struct Brick;
-struct BrickDespawn;
-struct Player {
+pub struct Player {
     index: usize,
 }
 struct Score(usize);
 struct Ball;
-
+struct Hit;
 struct BoardBottom;
 struct BoardOther;
-
 struct BreakoutCleanup;
 
 pub struct BreakoutPlugin {
-    pub config: BreakoutConfig,
+    pub render: bool,
+    pub human: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -51,9 +85,14 @@ enum BreakoutState {
 
 impl Plugin for BreakoutPlugin {
     fn build(&self, app: &mut AppBuilder) {
-        app.insert_resource(self.config)
+        let mut config = BreakoutConfig::default();
+        config.human = self.human;
+        config.render = self.render;
+
+        app.insert_resource(config)
             .insert_resource(Score(0))
             .add_state(BreakoutState::Loading)
+            .add_plugin(InspectorPlugin::<BreakoutConfig>::new_insert_manually().shared())
             .add_system_set(
                 SystemSet::on_enter(BreakoutState::Loading)
                     .with_system(setup_environment.system())
@@ -65,8 +104,6 @@ impl Plugin for BreakoutPlugin {
                 SystemSet::on_update(BreakoutState::Playing)
                     .with_system(update_ball.system())
                     .with_system(ball_collision.system())
-                    .with_system(despawn_bricks.system())
-                    .with_system(keyboard_input_system.system())
                     .with_system(ball_bounds_check.system()),
             )
             .add_system_set(
@@ -74,10 +111,11 @@ impl Plugin for BreakoutPlugin {
                     .with_system(clean_environment.system()),
             );
 
-        if self.config.human {
+        if self.human {
             app.add_system_set(
                 SystemSet::on_update(BreakoutState::Playing)
-                    .with_system(player_movement_human.system()),
+                    .with_system(player_movement_human.system())
+                    .with_system(other_keyboard_input.system()),
             );
             println!("Press A or D, or Left or Right Arrow\nR to reset\nEscape to exit");
         } else {
@@ -93,11 +131,11 @@ impl Plugin for BreakoutPlugin {
 fn setup_environment(
     mut commands: Commands,
     mut rapier_config: ResMut<RapierConfiguration>,
-    config: ResMut<BreakoutConfig>,
+    config: Res<BreakoutConfig>,
     mut state: ResMut<State<BreakoutState>>,
     mut score: ResMut<Score>,
 ) {
-    rapier_config.scale = RAPIER_SCALE;
+    rapier_config.scale = config.rapier_scale;
     rapier_config.gravity = Vec2::ZERO.into();
     score.0 = 0;
 
@@ -109,7 +147,7 @@ fn setup_environment(
     state.set(BreakoutState::Playing).unwrap();
 }
 
-fn spawn_board(mut commands: Commands) {
+fn spawn_board(mut commands: Commands, config: Res<BreakoutConfig>) {
     // draw board
     commands
         .spawn_bundle(RigidBodyBundle {
@@ -120,63 +158,67 @@ fn spawn_board(mut commands: Commands) {
             // Top
             create_board_side(
                 parent,
-                Vec2::new(0.0, BOARD_SIZE_HALF.y),
+                Vec2::new(0.0, config.board_size_half.y),
                 Vec2::new(
-                    BOARD_SIZE_HALF.x + BOARD_LINE_SIZE_HALF,
-                    BOARD_LINE_SIZE_HALF,
+                    config.board_size_half.x + config.board_line_size_half,
+                    config.board_line_size_half,
                 ),
                 BoardOther,
+                config.board_color,
             );
             // Bottom
             create_board_side(
                 parent,
-                Vec2::new(0.0, -BOARD_SIZE_HALF.y),
+                Vec2::new(0.0, -config.board_size_half.y),
                 Vec2::new(
-                    BOARD_SIZE_HALF.x + BOARD_LINE_SIZE_HALF,
-                    BOARD_LINE_SIZE_HALF,
+                    config.board_size_half.x + config.board_line_size_half,
+                    config.board_line_size_half,
                 ),
                 BoardBottom,
+                config.board_color,
             );
             // Left
             create_board_side(
                 parent,
-                Vec2::new(-BOARD_SIZE_HALF.x, 0.0),
-                Vec2::new(BOARD_LINE_SIZE_HALF, BOARD_SIZE_HALF.y),
+                Vec2::new(-config.board_size_half.x, 0.0),
+                Vec2::new(config.board_line_size_half, config.board_size_half.y),
                 BoardOther,
+                config.board_color,
             );
             // Right
             create_board_side(
                 parent,
-                Vec2::new(BOARD_SIZE_HALF.x, 0.0),
-                Vec2::new(BOARD_LINE_SIZE_HALF, BOARD_SIZE_HALF.y),
+                Vec2::new(config.board_size_half.x, 0.0),
+                Vec2::new(config.board_line_size_half, config.board_size_half.y),
                 BoardOther,
+                config.board_color,
             );
 
-            let size_x: f32 = BOARD_SIZE_HALF.x / (BRICK_GRID.x + 2) as f32;
-            let size_y: f32 = BOARD_SIZE_HALF.y * 0.5 / (BRICK_GRID.y + 2) as f32;
+            let size_x: f32 = config.board_size_half.x / (config.brick_grid.x + 2) as f32;
+            let size_y: f32 = config.board_size_half.y * 0.5 / (config.brick_grid.y + 2) as f32;
             // Create Bricks
-            for x in 0..BRICK_GRID.x {
-                for y in 0..BRICK_GRID.y {
+            for x in 0..config.brick_grid.x {
+                for y in 0..config.brick_grid.y {
                     let pos_x = range_lerp(
                         (x + 1) as f32,
                         0.0,
-                        (BRICK_GRID.x + 1) as f32,
-                        -BOARD_SIZE_HALF.x,
-                        BOARD_SIZE_HALF.x,
+                        (config.brick_grid.x + 1) as f32,
+                        -config.board_size_half.x,
+                        config.board_size_half.x,
                     );
                     let pos_y = range_lerp(
                         (y + 1) as f32,
                         0.0,
-                        (BRICK_GRID.y + 1) as f32,
+                        (config.brick_grid.y + 1) as f32,
                         0.0,
-                        BOARD_SIZE_HALF.y,
+                        config.board_size_half.y,
                     );
 
                     create_brick(
                         parent,
                         Vec2::new(pos_x, pos_y),
                         Vec2::new(size_x, size_y),
-                        Color::rgb_linear(0.0, 0.0, 0.0),
+                        config.brick_color,
                     );
                 }
             }
@@ -190,6 +232,7 @@ fn create_board_side(
     pos: Vec2,
     size_half: Vec2,
     component: impl Component,
+    color: Color,
 ) {
     parent
         .spawn_bundle(ColliderBundle {
@@ -204,7 +247,7 @@ fn create_board_side(
             ..Default::default()
         })
         .insert(ColliderPositionSync::Discrete)
-        .insert(ColliderDebugRender::from(BOARD_COLOR))
+        .insert(ColliderDebugRender::from(color))
         .insert(BreakoutCleanup)
         .insert(component);
 }
@@ -229,34 +272,43 @@ fn create_brick(parent: &mut ChildBuilder, pos: Vec2, size_half: Vec2, color: Co
         .insert(BreakoutCleanup);
 }
 
-fn spawn_player(mut commands: Commands) {
+fn spawn_player(mut commands: Commands, config: Res<BreakoutConfig>) {
     commands
         .spawn_bundle(RigidBodyBundle {
-            position: Vec2::new(0.0, -BOARD_SIZE_HALF.y + (BOARD_SIZE_HALF.y * 0.1)).into(),
-            mass_properties: (RigidBodyMassPropsFlags::ROTATION_LOCKED).into(),
+            position: Vec2::new(
+                0.0,
+                -config.board_size_half.y + (config.board_size_half.y * 0.1),
+            )
+            .into(),
+            body_type: RigidBodyType::KinematicPositionBased,
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
             collider_type: ColliderType::Solid,
-            shape: ColliderShape::cuboid(PLAYER_SIZE_HALF.x, PLAYER_SIZE_HALF.y),
+            shape: ColliderShape::cuboid(config.player_size_half.x, config.player_size_half.y),
             material: ColliderMaterial {
                 restitution: 1.0,
                 ..Default::default()
             },
             ..Default::default()
         })
-        .insert(ColliderPositionSync::Discrete)
-        .insert(ColliderDebugRender::from(PLAYER_COLOR))
+        .insert(RigidBodyPositionSync::Discrete)
+        //.insert(ColliderPositionSync::Discrete)
+        .insert(ColliderDebugRender::from(config.player_color))
         .insert(Player { index: 0 })
         .insert(BreakoutCleanup);
 }
 
-fn spawn_ball(mut commands: Commands) {
+fn spawn_ball(mut commands: Commands, config: Res<BreakoutConfig>) {
     let mut rnd = rand::thread_rng();
 
     commands
         .spawn_bundle(RigidBodyBundle {
-            position: Vec2::new(0.0, -BOARD_SIZE_HALF.y + (BOARD_SIZE_HALF.y * 0.2)).into(),
+            position: Vec2::new(
+                0.0,
+                -config.board_size_half.y + (config.board_size_half.y * 0.2),
+            )
+            .into(),
             mass_properties: (RigidBodyMassPropsFlags::ROTATION_LOCKED).into(),
             activation: RigidBodyActivation::cannot_sleep(),
             ccd: RigidBodyCcd {
@@ -269,14 +321,18 @@ fn spawn_ball(mut commands: Commands) {
             },
             // Create random launch vector
             velocity: RigidBodyVelocity {
-                linvel: Vec2::new(rnd.gen_range(BALL_INIT_X_RANGE), BALL_INIT_Y).into(),
+                linvel: Vec2::new(
+                    rnd.gen_range(config.ball_init_x_range.0..config.ball_init_x_range.1),
+                    config.ball_init_y,
+                )
+                .into(),
                 angvel: 0.0,
             },
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
             collider_type: ColliderType::Solid,
-            shape: ColliderShape::ball(BALL_SIZE_HALF),
+            shape: ColliderShape::ball(config.ball_size_half),
             flags: (ActiveEvents::CONTACT_EVENTS).into(),
             material: ColliderMaterial {
                 friction: 0.0, // you lose all ball control on paddle at 0
@@ -287,7 +343,7 @@ fn spawn_ball(mut commands: Commands) {
             ..Default::default()
         })
         .insert(ColliderPositionSync::Discrete)
-        .insert(ColliderDebugRender::from(PLAYER_COLOR))
+        .insert(ColliderDebugRender::from(config.player_color))
         .insert(Ball)
         .insert(BreakoutCleanup);
 }
@@ -310,7 +366,6 @@ fn update_ball(mut balls: Query<&mut RigidBodyVelocity, With<Ball>>) {
             } else {
                 0.01
             };
-            //warn!("curve ball, {}", rb_vel.linvel[0].abs());
         }
     }
 }
@@ -318,61 +373,64 @@ fn update_ball(mut balls: Query<&mut RigidBodyVelocity, With<Ball>>) {
 // The ball can get away using the paddle to force it though a wall, this checks for that
 fn ball_bounds_check(
     balls: Query<&RigidBodyPosition, With<Ball>>,
+    config: Res<BreakoutConfig>,
     mut state: ResMut<State<BreakoutState>>,
 ) {
     for rb_pos in balls.iter() {
-        if rb_pos.position.translation.x.abs() > BOARD_SIZE_HALF.x
-            || rb_pos.position.translation.y.abs() > BOARD_SIZE_HALF.y
+        if rb_pos.position.translation.x.abs() > config.board_size_half.x
+            || rb_pos.position.translation.y.abs() > config.board_size_half.y
         {
             state.set(BreakoutState::Resetting).unwrap()
         }
     }
 }
 
+// So Rapier will provide the collisions, but only the entity id
+// We can either record entity ids when we create them, or mark the entities
+// You could also query narrow phase, but using the ContactEvent is a bit clearer
+// this does cause the 1-frame-lag
 fn ball_collision(
     mut commands: Commands,
-    narrow_phase: Res<NarrowPhase>,
-    bricks: Query<Entity, With<Brick>>,
-    balls: Query<Entity, With<Ball>>,
-    board_bottom: Query<Entity, With<BoardBottom>>,
+    mut contact_events: EventReader<ContactEvent>,
+    brick_hits: Query<Entity, (With<Brick>, With<Hit>)>,
+    bottom_hits: Query<Entity, (With<BoardBottom>, With<Hit>)>,
+    extra_hits: Query<Entity, (Without<Brick>, Without<BoardBottom>, With<Hit>)>,
     mut score: ResMut<Score>,
     mut state: ResMut<State<BreakoutState>>,
+    config: Res<BreakoutConfig>,
 ) {
-    let ball = balls.single().expect("Should be one ball at least");
-    for brick in bricks.iter() {
-        // Find the contact pair, if it exists, between two colliders.
-        if let Some(contact) = narrow_phase.contact_pair(ball.handle(), brick.handle()) {
-            if contact.has_any_active_contact {
-                // We have a contact, mark for despawn, using event delay
-                commands.entity(brick).insert(BrickDespawn);
-                score.0 += 1;
-
-                // is that all of them?
-                if score.0 == BRICK_GRID.x * BRICK_GRID.y {
-                    state.set(BreakoutState::Resetting).unwrap();
-                    return;
-                }
+    // Mark every contact event entity, will process them dddddd
+    for contact_event in contact_events.iter() {
+        match contact_event {
+            ContactEvent::Started(h1, h2) => {
+                commands.entity(h1.entity()).insert(Hit);
+                commands.entity(h2.entity()).insert(Hit);
             }
+            _ => (),
         }
+    }
 
-        let bottom = board_bottom.single().expect("More than one bottom?");
-        if let Some(contact) = narrow_phase.contact_pair(ball.handle(), bottom.handle()) {
-            if contact.has_any_active_contact {
-                state.set(BreakoutState::Resetting).unwrap();
-                return;
-            }
+    for b in brick_hits.iter() {
+        commands.entity(b).despawn_recursive();
+        score.0 += 1;
+
+        // This exit condition only works assuming no bugs with hits
+        // being using it this way to debug
+        if score.0 == config.brick_grid.x * config.brick_grid.y {
+            state.set(BreakoutState::Resetting).unwrap();
+            return;
         }
+    }
+    for _ in bottom_hits.iter() {
+        state.set(BreakoutState::Resetting).unwrap();
+        return;
+    }
+    for ext in extra_hits.iter() {
+        commands.entity(ext).remove::<Hit>();
     }
 }
 
-// Removing bricks after collision
-fn despawn_bricks(mut commands: Commands, mut bricks: Query<Entity, With<BrickDespawn>>) {
-    for e in bricks.iter_mut() {
-        commands.entity(e).despawn();
-    }
-}
-
-fn keyboard_input_system(
+fn other_keyboard_input(
     mut keyboard_input: ResMut<Input<KeyCode>>,
     mut state: ResMut<State<BreakoutState>>,
 ) {
@@ -381,50 +439,6 @@ fn keyboard_input_system(
         // TODO: You get stuck in a loop without updating keyboard
         // https://github.com/bevyengine/bevy/issues/1700
         keyboard_input.update();
-    }
-}
-
-fn player_movement_human(
-    keyboard_input: Res<Input<KeyCode>>,
-    mut players: Query<&mut RigidBodyVelocity, With<Player>>,
-    params: Res<IntegrationParameters>,
-) {
-    for mut rb_vel in players.iter_mut() {
-        let left = keyboard_input.pressed(KeyCode::A) || keyboard_input.pressed(KeyCode::Left);
-        let right = keyboard_input.pressed(KeyCode::D) || keyboard_input.pressed(KeyCode::Right);
-        if left {
-            rb_vel.linvel = Vec2::new(-PLAYER_SPEED * params.dt, 0.0).into();
-        } else if right {
-            rb_vel.linvel = Vec2::new(PLAYER_SPEED * params.dt, 0.0).into();
-        } else {
-            rb_vel.linvel = Vec2::new(0.0, 0.0).into();
-        }
-    }
-}
-
-fn player_movement_neat(
-    mut neat: ResMut<NeatML>,
-    mut players: Query<(&Player, &RigidBodyPosition, &mut RigidBodyVelocity)>,
-    balls: Query<&RigidBodyPosition, With<Ball>>,
-    params: Res<IntegrationParameters>,
-) {
-    let ball_pos = balls.single().expect("One ball should exist!");
-
-    for (player, pos, mut rb_vel) in players.iter_mut() {
-        let observations = &[
-            pos.position.translation.x as f64,      // player x
-            pos.position.translation.y as f64,      // player y
-            ball_pos.position.translation.x as f64, // ball x
-            ball_pos.position.translation.y as f64, // ball y
-        ];
-        let output = neat.pool.activate_nth(player.index, observations).unwrap();
-
-        // Go left
-        rb_vel.linvel = match output[0] {
-            o if o < 0.33 => Vec2::new(-PLAYER_SPEED * params.dt, 0.0).into(),
-            o if o > 0.66 => Vec2::new(PLAYER_SPEED * params.dt, 0.0).into(),
-            _ => Vec2::ZERO.into(),
-        }
     }
 }
 

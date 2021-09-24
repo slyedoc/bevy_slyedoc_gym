@@ -18,7 +18,7 @@ use environments::*;
 
 use crate::environment::{EnvironmentConfig, EnvironmentResetEvent};
 use crate::environments::acrobot::AcrobotPlugin;
-use crate::environments::breakout::{BreakoutConfig, BreakoutPlugin};
+use crate::environments::breakout::BreakoutPlugin;
 use crate::environments::cartpole::CartPolePlugin;
 use crate::environments::flappy::{FlappyConfig, FlappyPlugin};
 use crate::environments::mountaincar::MountainCarPlugin;
@@ -95,10 +95,8 @@ fn main() {
             },
         }),
         EnvironmentType::Breakout => app.add_plugin(BreakoutPlugin {
-            config: BreakoutConfig {
-                render: !config.simulation,
-                human: config.human,
-            },
+            render: !config.simulation,
+            human: config.human,
         }),
     };
 
