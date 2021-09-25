@@ -13,9 +13,6 @@ pub struct EnvironmentState {
 }
 
 
-
-pub struct EnvironmentResetEvent;
-
 // Helper function for adding the 2 resources uses to by the gym
 pub fn insert_env_resources(
     app: &mut bevy::prelude::AppBuilder,

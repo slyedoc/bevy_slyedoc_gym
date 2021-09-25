@@ -30,8 +30,10 @@ pub struct BreakoutConfig {
     pub ball_size_half: f32,
     pub ball_init_x_range: (f32, f32),
     pub ball_init_y: f32,
+    pub ball_speed: f32,
+    pub ball_y_basis: f32,
+    pub ball_basis_engage: f32,
 }
-
 
 impl Default for BreakoutConfig {
     fn default() -> Self {
@@ -40,7 +42,7 @@ impl Default for BreakoutConfig {
             human: true,
             rapier_scale: 50.0,
             player_size_half: Vec2::new(1.0, 0.1),
-            player_speed: 1.0,
+            player_speed: 2.0,
             player_color: Color::BLUE,
             board_size_half: Vec2::new(4.0, 6.0),
             board_line_size_half: 0.1,
@@ -50,6 +52,9 @@ impl Default for BreakoutConfig {
             ball_size_half: 0.1,
             ball_init_x_range: (-2.0, 2.0),
             ball_init_y: 5.0,
+            ball_speed: 200.0,
+            ball_y_basis: 0.01,
+            ball_basis_engage: 0.8,
         }
     }
 }
@@ -301,7 +306,6 @@ fn spawn_player(mut commands: Commands, config: Res<BreakoutConfig>) {
 
 fn spawn_ball(mut commands: Commands, config: Res<BreakoutConfig>) {
     let mut rnd = rand::thread_rng();
-
     commands
         .spawn_bundle(RigidBodyBundle {
             position: Vec2::new(
@@ -349,22 +353,26 @@ fn spawn_ball(mut commands: Commands, config: Res<BreakoutConfig>) {
 }
 
 // Keep the ball speed somewhat constant and  avoid getting stuck by back and forth
-fn update_ball(mut balls: Query<&mut RigidBodyVelocity, With<Ball>>) {
+fn update_ball(
+    mut balls: Query<&mut RigidBodyVelocity, With<Ball>>,
+    params: Res<IntegrationParameters>,
+    config: Res<BreakoutConfig>,
+) {
     for mut rb_vel in balls.iter_mut() {
         // Normalize ball speed, currently picked at random
         let mag = rb_vel.linvel.norm();
-        if mag < 5.0 || mag > 6.0 {
-            rb_vel.linvel *= 5.0 / mag;
-            //warn!("ball speed, mag: {}", mag);
+        let speed = config.ball_speed * params.dt;
+        if mag != speed {
+            rb_vel.linvel *= speed / mag;
         }
 
         // This will curve that ball up when its going more left to right that up and down
         // so it can't get stuck, relies on the speed normalizing above
-        if rb_vel.linvel[0].abs() > 4.0 {
-            rb_vel.linvel[1] += if rb_vel.linvel[1].is_sign_negative() {
-                -0.01
+        if rb_vel.linvel[0].abs() > config.ball_basis_engage * speed {
+            rb_vel.linvel[1] += if rb_vel.linvel[1].is_sign_positive() {
+                config.ball_y_basis
             } else {
-                0.01
+                -config.ball_y_basis
             };
         }
     }
@@ -388,7 +396,7 @@ fn ball_bounds_check(
 // So Rapier will provide the collisions, but only the entity id
 // We can either record entity ids when we create them, or mark the entities
 // You could also query narrow phase, but using the ContactEvent is a bit clearer
-// this does cause the 1-frame-lag
+// This causes an additional 1-frame-lag
 fn ball_collision(
     mut commands: Commands,
     mut contact_events: EventReader<ContactEvent>,
@@ -399,7 +407,7 @@ fn ball_collision(
     mut state: ResMut<State<BreakoutState>>,
     config: Res<BreakoutConfig>,
 ) {
-    // Mark every contact event entity, will process them dddddd
+    // Mark every contact event entity, will process them next frame
     for contact_event in contact_events.iter() {
         match contact_event {
             ContactEvent::Started(h1, h2) => {

@@ -7,8 +7,12 @@ pub mod breakout;
 
 use std::{fmt, str::FromStr};
 
+use bevy::prelude::AppBuilder;
 
-#[derive(Clone, Debug)]
+use self::{acrobot::AcrobotPlugin, breakout::BreakoutPlugin, cartpole::CartPolePlugin, flappy::{FlappyConfig, FlappyPlugin}, mountaincar::MountainCarPlugin, pendulum::PendulumPlugin};
+
+
+#[derive(Copy,Clone,Debug,Eq, PartialEq, Hash)]
 pub enum EnvironmentType {
     Acrobot,
     CartPole,
@@ -54,4 +58,26 @@ impl fmt::Display for EnvironmentType {
             EnvironmentType::Breakout => write!(f, "Breakout"),
         }
     }
+}
+
+pub fn load_environment(app: &mut AppBuilder, env: EnvironmentType, render: bool, human: bool) {
+    match env {
+        EnvironmentType::Acrobot => app.add_plugin(AcrobotPlugin { render: render }),
+        EnvironmentType::CartPole => app.add_plugin(CartPolePlugin {
+            human: human,
+            render: render,
+        }),
+        EnvironmentType::MountainCar => app.add_plugin(MountainCarPlugin { render: render }),
+        EnvironmentType::Pendulum => app.add_plugin(PendulumPlugin { render: render }),
+        EnvironmentType::Flappy => app.add_plugin(FlappyPlugin {
+            config: FlappyConfig {
+                render: render,
+                human: human,
+            },
+        }),
+        EnvironmentType::Breakout => app.add_plugin(BreakoutPlugin {
+            render: render,
+            human: human,
+        }),
+    };
 }

@@ -9,11 +9,17 @@ pub struct PendulumPlugin {
 
 }
 
+enum PendulumState {
+    Playing,
+    Reset,
+}
+
 impl Plugin for PendulumPlugin {
     fn build(&self, app: &mut AppBuilder) {
         insert_env_resources(app, 2, 2);
 
-        app.add_startup_system(setup_environment.system())
+        app.add_system_set( SystemSet::on_in_stack_update(s))
+            .add_startup_system(setup_environment.system())
             .add_system_to_stage(CoreStage::PreUpdate, update_state.system())
             .add_system_to_stage(CoreStage::PostUpdate, take_action.system());
 

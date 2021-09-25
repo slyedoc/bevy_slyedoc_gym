@@ -3,8 +3,8 @@ mod environment;
 mod environments;
 mod helpers;
 mod models;
+mod menu;
 
-use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use bevy_inspector_egui::WorldInspectorParams;
@@ -16,20 +16,16 @@ use clap::Clap;
 use config::Config;
 use environments::*;
 
-use crate::environment::{EnvironmentConfig, EnvironmentResetEvent};
-use crate::environments::acrobot::AcrobotPlugin;
-use crate::environments::breakout::BreakoutPlugin;
-use crate::environments::cartpole::CartPolePlugin;
-use crate::environments::flappy::{FlappyConfig, FlappyPlugin};
-use crate::environments::mountaincar::MountainCarPlugin;
-use crate::environments::pendulum::PendulumPlugin;
+use crate::menu::MenuPlugin;
+
+
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum MainState {
-    Loading,
-    Playing,
-    Resetting,
+enum AppState {
+    Loading, // Asset Loading
+    Menu,    // Main Menu
+    Environment(EnvironmentType),
 }
 
 fn main() {
@@ -44,24 +40,23 @@ fn main() {
         app.insert_resource(Msaa { samples: 4 })
             .insert_resource(ClearColor(Color::WHITE))
             .insert_resource(WindowDescriptor {
-                title: config.environment.to_string(),
+                title: match config.environment {
+                    Some(e) => e.to_string(),
+                    None => "Bevy Slyedoc Gym".to_string(),
+                },
                 ..Default::default()
             })
             .insert_resource(WorldInspectorParams {
-                enabled: false,
+                enabled: true,
                 despawnable_entities: false,
                 ..Default::default()
             })
             .add_plugins(DefaultPlugins)
-            .add_plugin(EguiPlugin)
-            .add_system(keyboard_input.system());
+            .add_plugin(EguiPlugin);
     }
 
     // Setup Common Resources
-    app.insert_resource(EnvironmentConfig {
-        render: !config.simulation,
-    })
-    .add_event::<EnvironmentResetEvent>()
+    app
     .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
     .add_plugin(DebugLinesPlugin)
     .insert_resource(DebugLines {
@@ -71,38 +66,26 @@ fn main() {
 
     if !config.simulation {
         app.add_plugin(RapierRenderPlugin);
+        app.add_plugin(MenuPlugin);
     }
 
     // Add environment
     match config.environment {
-        EnvironmentType::Acrobot => app.add_plugin(AcrobotPlugin {
-            render: !config.simulation,
-        }),
-        EnvironmentType::CartPole => app.add_plugin(CartPolePlugin {
-            human: config.human,
-            render: !config.simulation,
-        }),
-        EnvironmentType::MountainCar => app.add_plugin(MountainCarPlugin {
-            render: !config.simulation,
-        }),
-        EnvironmentType::Pendulum => app.add_plugin(PendulumPlugin {
-            render: !config.simulation,
-        }),
-        EnvironmentType::Flappy => app.add_plugin(FlappyPlugin {
-            config: FlappyConfig {
-                render: !config.simulation,
-                human: config.human,
-            },
-        }),
-        EnvironmentType::Breakout => app.add_plugin(BreakoutPlugin {
-            render: !config.simulation,
-            human: config.human,
-        }),
-    };
+        Some(e) => {
+            load_environment(&mut app, e, !config.simulation, config.human);
+            app.add_state(AppState::Environment(e));
+        }
+        None => {
+            app.add_state(AppState::Menu);
+        },
+    }
 
     app.add_startup_system(enable_physics_profiling.system())
         .run();
 }
+
+
+
 
 fn setup_physics(
     mut params: ResMut<IntegrationParameters>,
@@ -112,11 +95,7 @@ fn setup_physics(
     params.dt = 3.0 / 60.0
 }
 
-fn keyboard_input(mut exit: EventWriter<AppExit>, keys: Res<Input<KeyCode>>) {
-    if keys.pressed(KeyCode::Escape) {
-        exit.send(AppExit);
-    }
-}
+
 
 fn enable_physics_profiling(mut pipeline: ResMut<PhysicsPipeline>) {
     pipeline.counters.enable()
