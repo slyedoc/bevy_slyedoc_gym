@@ -1,5 +1,7 @@
 # Bevy Slyedoc Gym
 
+> Not working on this anymore! Was first time using rapier and dont know enough do this well.  Only leaving this up as a ref for myself.
+
 - [Bevy Slyedoc Gym](#bevy-slyedoc-gym)
   - [Design](#design)
   - [Getting started](#getting-started)
